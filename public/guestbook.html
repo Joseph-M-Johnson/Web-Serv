@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guestbook</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+
+<body>
+    <div class="page-shell guestbook-shell">
+        <header class="topbar">
+            <div class="brand">Express Portal</div>
+            <nav class="nav-links" aria-label="Main navigation">
+                <a href="/">Home</a>
+                <a href="/projects">Projects</a>
+                <a href="/guestbook">Guestbook</a>
+                <a href="/dashboard">Dashboard</a>
+                <a href="/space">Space</a>
+            </nav>
+        </header>
+
+        <main class="guestbook-panel">
+            <h1>Guestbook</h1>
+            <p id="list-error" role="alert"></p>
+            <ul class="guestbook-list" id="guestbook-list" aria-live="polite"></ul>
+            <form id="guestbook-form" class="guestbook-form">
+                <label for="name">Name</label>
+                <input id="name" type="text" name="name" maxlength="40" required />
+
+                <label for="msg">Message</label>
+                <textarea id="msg" name="msg" maxlength="280" placeholder="Leave a message" required></textarea>
+
+                <button type="submit">Post</button>
+            </form>
+            <p id="form-error" role="alert"></p>
+        </main>
+        <button id="logout-button" type="button" class="secondary-button" hidden>Log out</button>
+    </div>
+
+    <script src="/js/guestbook.js"></script>
+</body>
+
+</html>
