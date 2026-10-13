@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+
+<body>
+    <div class="page-shell">
+        <header class="topbar">
+            <div class="brand">Express Portal</div>
+            <nav class="nav-links" aria-label="Main navigation">
+                <a href="/">Home</a>
+                <a href="/projects">Projects</a>
+                <a href="/guestbook">Guestbook</a>
+                <a href="/dashboard">Dashboard</a>
+                <a href="/space">Space</a>
+            </nav>
+        </header>
+
+        <main class="app-card dashboard-layout">
+            <section class="dashboard-header">
+                <div class="eyebrow">Dashboard</div>
+                <h1>Welcome back</h1>
+                <p>Manage your workspace and keep your Express app running smoothly.</p>
+            </section>
+
+            <section class="dashboard-grid" aria-label="Dashboard overview">
+                <article class="stat-card">
+                    <span class="stat-label">Status</span>
+                    <strong>Online</strong>
+                </article>
+                <article class="stat-card">
+                    <span class="stat-label">Projects</span>
+                    <strong>3 Active</strong>
+                </article>
+                <article class="stat-card">
+                    <span class="stat-label">Messages</span>
+                    <strong>Guestbook Ready</strong>
+                </article>
+            </section>
+
+            <button id="logout-button" type="button" class="secondary-button">Log out</button>
+        </main>
+    </div>
+
+    <script src="/js/dashboard.js"></script>
+</body>
+
+</html>

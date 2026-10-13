@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Space Picture of the Day</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+
+<body>
+    <div class="page-shell guestbook-shell">
+        <header class="topbar">
+            <div class="brand">Express Portal</div>
+            <nav class="nav-links" aria-label="Main navigation">
+                <a href="/">Home</a>
+                <a href="/dashboard">Dashboard</a>
+                <a href="/projects">Projects</a>
+                <a href="/guestbook">Guestbook</a>
+                <a href="/space">Space</a>
+            </nav>
+        </header>
+
+        <main class="guestbook-panel">
+            <h1>Space Picture of the Day</h1>
+
+            <form id="space-form" class="guestbook-form">
+                <label for="date">Pick a date</label>
+                <input type="date" id="date" min="1995-06-16" />
+                <button type="submit">Show picture</button>
+            </form>
+
+            <p id="status" role="status"></p>
+
+            <article id="result" hidden>
+                <h2 id="title"></h2>
+                <p id="date-shown"></p>
+                <img id="picture" alt="" />
+                <p id="description"></p>
+                <a id="nasa-link" target="_blank" rel="noopener">Read the full story on NASA's website</a>
+            </article>
+        </main>
+    </div>
+
+    <script src="/js/space.js"></script>
+</body>
+
+</html>

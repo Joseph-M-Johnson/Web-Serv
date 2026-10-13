@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Express Portal</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+
+<body>
+    <div class="page-shell">
+        <header class="topbar">
+            <div class="brand">Express Portal</div>
+            <nav class="nav-links" aria-label="Main navigation">
+                <a href="/">Home</a>
+                <a href="/dashboard">Dashboard</a>
+                <a href="/projects">Projects</a>
+                <a href="/guestbook">Guestbook</a>
+                <a href="/space">Space</a>
+            </nav>
+        </header>
+
+        <main class="app-card hero-layout">
+            <section id="status" class="hero-copy" aria-live="polite"></section>
+
+            <section id="login-section" class="auth-panel" aria-label="Login panel">
+                <div class="login-section">
+                    <h2>Login</h2>
+                    <form action="/login" id="login-form" method="post" class="login-form">
+                        <label for="password">Password</label>
+                        <input type="password" name="password" id="password" placeholder="Enter your password" required>
+                        <label><input type="checkbox" name="rememberMe">Remember Me</label>
+                        <button type="submit" class="primary-button">Log in</button>
+                    </form>
+                    <p id="login-message" class="message" role="status" aria-live="polite"></p>
+                </div>
+            </section>
+
+            <button id="logout-button" type="button" class="secondary-button" hidden>Log out</button>
+        </main>
+    </div>
+
+    <script src="/js/login.js"></script>
+</body>
+
+</html>
