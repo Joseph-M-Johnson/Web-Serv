@@ -1,14 +1,24 @@
 require('dotenv').config();
 
+const REQUIRED_ENV = ['SESSION_SECRET', 'NASA_API_KEY', 'ADMIN_USERNAME', 'ADMIN_PASSWORD'];
+for (const name of REQUIRED_ENV) {
+    if (!process.env[name]) {
+        console.error(`Missing ${name} in .env (or in Render's Environment settings)`);
+        process.exit(1);
+    }
+}
+const db = require('./db');
+const bcrypt = require('bcryptjs');
 const express = require('express');
 const session = require('express-session');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const { Filter } = require('bad-words')
-const crypto = require('crypto');
+const isProduction = process.env.NODE_ENV === 'production';
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { error } = require('console');
 
 
@@ -31,6 +41,7 @@ app.use(helmet({
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const LOG_FILE = path.join(__dirname, 'server.log');
+const USERS_FILE = path.join(__dirname, 'users.json');
 
 let visitorCount = 0;
 let MAINTENANCE_MODE = false
@@ -42,30 +53,10 @@ if (fs.existsSync(LOG_FILE) && fs.statSync(LOG_FILE).size > 128 * 128) {
 }
 
 
-const GUESTBOOK_FILE = path.join(__dirname, 'guestbook.json');
 const apodCache = new Map();
 const TODAY_MAX_AGE = 60 * 60 * 1000;
 const MAX_CACHE_SIZE = 100;
 
-function getGuestbookMessages() {
-    if (!fs.existsSync(GUESTBOOK_FILE)) return [];
-
-    try {
-        const raw = fs.readFileSync(GUESTBOOK_FILE, 'utf8').trim();
-        if (!raw) return [];
-
-        const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) {
-            throw new Error('Guestbook data must be a JSON array.');
-        }
-
-        return parsed;
-    } catch (err) {
-        const error = new Error(`Could not read guestbook data: ${err.message}`);
-        error.status = 500;
-        throw error;
-    }
-}
 
 function validateEntry(name, msg) {
     if (typeof name !== 'string' || typeof msg !== 'string') {
@@ -78,6 +69,46 @@ function validateEntry(name, msg) {
         return 'Message must be 1 to 280 characters.';
     }
     return null;
+}
+
+//Line 239//
+function validateCredentials(username, password) {
+    if (typeof username !== 'string' || typeof password !== 'string') {
+        return 'Username and password must be text.';
+    }
+    if (!/^[a-z0-9_]{3,20}$/.test(username.trim().toLowerCase())) {
+        return 'Username must be 3 to 20 letters, numbers or underscores.';
+    }
+    if (password.length < 8 || password.length > 72) {
+        return 'Password must be 8 to 72 characters.';
+    }
+    return null;
+}
+
+function requireAdminPage(req, res, next) {
+    if (req.session.role !== 'admin') {
+        return res.redirect('/');
+    }
+    next();
+}
+
+function startSession(req, user, rememberMe) {
+    return new Promise((resolve, reject) => {
+        req.session.regenerate((err) => {
+            if (err) return reject(err);
+            req.session.userId = user.id;
+            req.session.username = user.username;
+            req.session.role = user.role;
+            if (rememberMe) {
+                req.session.cookie.maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days
+            }
+            resolve();
+        });
+    });
+}
+
+function canModify(req, entry) {
+    return entry.authorId === req.session.userId || req.session.role === 'admin';
 }
 
 function validateApodDate(date) {
@@ -138,6 +169,13 @@ const spaceLimiter = rateLimit({
     message: { error: 'Too many space lookups. Please wait a minute.' }
 });
 
+// Rate limiter for login and registration attempts
+const authLimiter = rateLimit({
+    windowMs: 30 * 1000,
+    limit: 10,
+    message: { error: 'Too many login attempts. Please wait 30 seconds and try again.' }
+});
+
 app.use((req, res, next) => {
     if (MAINTENANCE_MODE) return res.status(503).send('...Maintenance Mode')
     next()
@@ -145,18 +183,64 @@ app.use((req, res, next) => {
 
 // Tracks logged-in users via a signed cookie - the browser sends it back
 // automatically, no frontend code needed. Requires SESSION_SECRET in .env.
+// app.use(session({
+//     secret: process.env.SESSION_SECRET || 'fallback_secret',
+//     resave: false,
+//     saveUninitialized: false,
+//     cookie: { maxAge: 15 * 60 * 1000 } // session expires after 15 minutes
+// }));
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'fallback_secret',
+    secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 15 * 60 * 1000 } // session expires after 15 minutes
+    cookie: {
+        maxAge: 15 * 60 * 1000,   // 15 minutes
+        httpOnly: true,           // page JavaScript cannot read it
+        sameSite: 'lax',          // other sites cannot send it with their forms
+        secure: isProduction      // only sent over HTTPS on the live site
+    }
 }));
+
+const MIN_FILL_TIME = 2000; // 2 seconds, in milliseconds
+
+// Writes a note about a caught bot to the console and server.log
+function logBot(req, reason) {
+    const line = `[${new Date().toISOString()}] BOT BLOCKED (${reason}) from ${req.ip} on ${req.path}\n`;
+    console.log(line.trim());
+    fs.appendFile(LOG_FILE, line, () => { });
+}
+
+// Blocks bot submissions using a honeypot and a time trap.
+// Bots get a fake "success" so they don't learn they were caught.
+function botCheck(req, res, next) {
+    // Check 1: the honeypot. Humans leave it empty.
+    if (req.body.website) {
+        logBot(req, 'honeypot filled');
+        return res.status(201).json({});
+    }
+
+    // Check 2: the time trap. Humans need more than 2 seconds.
+    const loadedAt = req.session.formLoadedAt;
+    if (!loadedAt || Date.now() - loadedAt < MIN_FILL_TIME) {
+        logBot(req, 'submitted too fast');
+        return res.status(201).json({});
+    }
+
+    next(); // passed both checks
+}
 
 // Route guard - use this on any route that should require login.
 // Example: app.get('/dashboard', requireAuth, (req, res) => { ... });
 function requireAuth(req, res, next) {
-    if (!req.session.isAuthenticated) {
-        return res.status(301).redirect('/');
+    if (!req.session.userId) {
+        return res.status(401).json({ error: 'Please log in first.' });
+    }
+    next();
+}
+
+function requireLoginPage(req, res, next) {
+    if (!req.session.userId) {
+        return res.redirect('/');
     }
     next();
 }
@@ -170,13 +254,19 @@ app.get('/api/hello', (req, res) => {
     res.json({ message: 'Hello, world!' });
 });
 
-app.get('/api/headers-demo', (req, res) => {
-    res.set('X-Student-Name', 'Joseph Johnson');
-    res.json({
-        browser: req.get('User-Agent'),
-        languages: req.get('Accept-Language'),
-        allRequestHeaders: req.headers
+if (!isProduction) {
+    app.get('/api/headers-demo', (req, res) => {
+        res.set('X-Student-Name', 'Your Name Here');
+        res.json({
+            browser: req.get('User-Agent'),
+            languages: req.get('Accept-Language'),
+            allRequestHeaders: req.headers
+        });
     });
+}
+
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok' });
 });
 
 // Exposes the visitor count as JSON, e.g. for a frontend script to display
@@ -186,16 +276,56 @@ app.get('/api/stats', (req, res) => {
 });
 
 // Checks the password against .env; marks the session authenticated if correct
-app.post('/login', (req, res) => {
-    const { password, rememberMe } = req.body;
-    if (password === process.env.APP_PASSWORD) {
-        req.session.isAuthenticated = true;
-        if (rememberMe) {
-            req.session.cookie.maxAge = 30 * 24 * 60 * 60 * 1000;
-        }
-        return res.status(200).json({ success: true });
+// app.post('/login', authLimiter, (req, res) => {
+//     const { password, rememberMe } = req.body;
+//     if (password === process.env.APP_PASSWORD) {
+//         req.session.isAuthenticated = true;
+//         if (rememberMe) {
+//             req.session.cookie.maxAge = 30 * 24 * 60 * 60 * 1000;
+//         }
+//         return res.status(200).json({ success: true });
+//     }
+//     return res.status(401).json({ success: false, error: 'Incorrect Password' });
+// });
+
+//New Login//
+app.post('/login', authLimiter, async (req, res) => {
+    const { username, password, rememberMe } = req.body;
+    if (typeof username !== 'string' || typeof password !== 'string') {
+        return res.status(400).json({ error: 'Username and password are required.' });
     }
-    return res.status(401).json({ success: false, error: 'Incorrect Password' });
+
+    const cleanUsername = username.trim().toLowerCase();
+    const user = await db.getUserByUsername(cleanUsername);
+    const passwordOk = user && await bcrypt.compare(password, user.passwordHash);
+
+    if (!passwordOk) {
+        // Same message whether the username or the password was wrong
+        return res.status(401).json({ error: 'Incorrect username or password.' });
+    }
+
+    await startSession(req, user, rememberMe);
+    res.json({ success: true, username: user.username });
+});
+
+//New app.post(User accounts)//
+app.post('/register', authLimiter, async (req, res) => {
+    const { username, password } = req.body;
+    const error = validateCredentials(username, password);
+    if (error) {
+        return res.status(400).json({ error });
+    }
+
+    const cleanName = username.trim().toLowerCase();
+    if (await db.getUserByUsername(cleanName)) {
+        return res.status(409).json({ error: 'That username is already taken.' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const user = await db.addUser({ username: cleanName, passwordHash });
+
+    await startSession(req, user); // new users are logged in right away
+    res.status(201).json({ username: user.username });
 });
 
 // Logout - destroys the session so req.session.isAuthenticated is gone
@@ -206,7 +336,7 @@ app.post('/logout', (req, res) => {
 });
 
 // Example protected route - try visiting this without logging in first
-app.get('/dashboard', requireAuth, (req, res) => {
+app.get('/dashboard', requireAdminPage, (req, res) => {
     // res.send('<h1>Dashboard</h1><p>You are logged in!</p>');\
     res.sendFile(path.join(PUBLIC_DIR, 'dashboard.html'))
 });
@@ -218,8 +348,21 @@ app.get('/projects', (req, res) => {
     res.sendFile(path.join(PUBLIC_DIR, 'projects.html'));
 });
 
+// app.get('/api/whoami', (req, res) => {
+//     res.json({ loggedIn: !!req.session.isAuthenticated });
+// });
+
+//New whoami//
 app.get('/api/whoami', (req, res) => {
-    res.json({ loggedIn: !!req.session.isAuthenticated });
+    if (!req.session.userId) {
+        return res.json({ loggedIn: false });
+    }
+    res.json({
+        loggedIn: true,
+        userId: req.session.userId,
+        username: req.session.username,
+        role: req.session.role
+    });
 });
 
 app.get('/api/space', spaceLimiter, async (req, res) => {
@@ -287,43 +430,79 @@ app.get('/api/space', spaceLimiter, async (req, res) => {
     res.json(result);
 });
 
-app.get('/guestbook', requireAuth, (req, res) => {
-    res.sendFile(path.join(PUBLIC_DIR, 'guestbook.html'))
+app.get('/guestbook', requireLoginPage, (req, res) => {
+    req.session.formLoadedAt = Date.now(); // start the clock
+    res.sendFile(path.join(PUBLIC_DIR, 'guestbook.html'));
 });
 
-app.get('/api/guestbook', requireAuth, (req, res, next) => {
-    try {
-        res.json(getGuestbookMessages());
-    } catch (err) {
-        next(err);
+app.get('/api/guestbook', requireAuth, async (req, res) => {
+    const entries = await db.getAllEntries();
+    res.json(entries);
+});
+
+app.get('/api/guestbook/:id', requireAuth, async (req, res) => {
+    const entry = await db.getEntryById(req.params.id);
+    if (!entry) {
+        return res.status(404).json({ error: 'Entry not found.' });
     }
+    res.json(entry);
 });
 
-app.post('/api/guestbook', requireAuth, (req, res) => {
-    const { name, msg } = req.body;
+app.delete('/api/guestbook/:id', requireAuth, async (req, res) => {
+    const entry = await db.getEntryById(req.params.id);
+    if (!entry) {
+        return res.status(404).json({ error: 'Entry not found.' });
+    }
+    if (!canModify(req, entry)) {
+        return res.status(403).json({ error: 'You can only delete your own messages.' });
+    }
+
+    await db.deleteEntry(entry.id);
+    res.status(204).end();
+});
+
+app.put('/api/guestbook/:id', requireAuth, async (req, res) => {
+    const { msg } = req.body;
+    const entry = await db.getEntryById(req.params.id);
+    if (!entry) {
+        return res.status(404).json({ error: 'Entry not found.' });
+    }
+    if (!canModify(req, entry)) {
+        return res.status(403).json({ error: 'You can only edit your own messages.' });
+    }
+
+    const error = validateEntry(entry.name, msg);
+    if (error) {
+        return res.status(400).json({ error });
+    }
+
+    // Keep your bad-words check here too, if you have one
+
+    const updated = await db.updateEntry(entry.id, { name: entry.name, msg: msg.trim() });
+    res.json(updated);
+});
+
+
+app.post('/api/guestbook', requireAuth, botCheck, async (req, res) => {
+    const { msg } = req.body;
+    const name = req.session.username;
+
     const error = validateEntry(name, msg);
     if (error) {
-        return res.status(400).json({ error: error });
-    }
-    const messages = getGuestbookMessages();
-    const cleanedInput = msg.replace(/\s+/g, ' ').trim();
-    const compactInput = cleanedInput.replace(/\s+/g, ' ');
-    if (filter.isProfane(compactInput)) {
-        return res.status(400).json({ error: "Message contains profanity" })
+        return res.status(400).json({ error });
     }
 
-    const entry = {
-        id: crypto.randomUUID(),
-        name: name,
-        msg: msg,
-        createdAt: new Date().toISOString()
+    if (filter.isProfane(msg)) {
+        return res.status(400).json({ error: 'Please keep your message friendly.' });
     }
 
-    messages.push(entry)
-    fs.writeFileSync(GUESTBOOK_FILE, JSON.stringify(messages.slice(-50), null, 2));
-    res.json({ success: true });
+    const entry = await db.addEntry({
+        name,
+        msg: msg.trim(),
+        authorId: req.session.userId
+    });
+    res.status(201).json(entry);
 });
-
 
 
 app.get('/about', (req, res) => {
@@ -377,4 +556,60 @@ app.use((err, req, res, next) => {
 
     return res.status(status).send(`<h1>Error ${status}</h1><p>${message}</p>`);
 });
-app.listen(PORT, () => console.log(`Server live on http://localhost:${PORT}`));
+
+async function ensureAdmin() {
+    const username = String(process.env.ADMIN_USERNAME || '').trim().toLowerCase();
+    const password = String(process.env.ADMIN_PASSWORD || '');
+
+    if (!username || !password) {
+        throw new Error('ADMIN_USERNAME and ADMIN_PASSWORD must be set in .env');
+    }
+
+    let users = [];
+    try {
+        const raw = await fs.promises.readFile(USERS_FILE, 'utf8');
+        users = JSON.parse(raw);
+    } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+    }
+
+    const existingIndex = users.findIndex(user => user.username && user.username.toLowerCase() === username);
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    if (existingIndex >= 0) {
+        const existing = users[existingIndex];
+        const passwordMatches = await bcrypt.compare(password, existing.passwordHash);
+
+        if (passwordMatches && existing.role === 'admin') {
+            return;
+        }
+
+        users[existingIndex] = {
+            ...existing,
+            id: existing.id || crypto.randomUUID(),
+            username,
+            passwordHash,
+            role: 'admin',
+            updatedAt: new Date().toISOString()
+        };
+        await fs.promises.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
+        console.log('Updated admin account');
+        return;
+    }
+
+    users.push({
+        id: crypto.randomUUID(),
+        username,
+        passwordHash,
+        role: 'admin',
+        createdAt: new Date().toISOString()
+    });
+    await fs.promises.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
+    console.log('Created admin account');
+}
+
+// app.listen(PORT, () => console.log(`Server live on http://localhost:${PORT}`));
+
+ensureAdmin().then(() => {
+    app.listen(PORT, () => console.log(`Server live on http://localhost:${PORT}`));
+});
