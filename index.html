@@ -28,11 +28,15 @@
                 <div class="login-section">
                     <h2>Login</h2>
                     <form action="/login" id="login-form" method="post" class="login-form">
+                        <label for="username">Username</label>
+                        <input id="username" name="username" autocomplete="username" required>
                         <label for="password">Password</label>
                         <input type="password" name="password" id="password" placeholder="Enter your password" required>
                         <label><input type="checkbox" name="rememberMe">Remember Me</label>
                         <button type="submit" class="primary-button">Log in</button>
+                        <p>New here? <a href="/register">Create an account</a></p>
                     </form>
+
                     <p id="login-message" class="message" role="status" aria-live="polite"></p>
                 </div>
             </section>
