@@ -1,21 +1,83 @@
+let currentUser = null;
+
+async function deleteEntry(id) {
+    if (!confirm('Delete this message?')) return;
+    const listError = document.querySelector('#list-error');
+
+    try {
+        const response = await fetch(`/api/guestbook/${encodeURIComponent(id)}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            listError.textContent = data.error || 'Could not delete that message.';
+            return;
+        }
+        loadMessages();
+    } catch (err) {
+        listError.textContent = 'Could not reach the server. Check your connection.';
+    }
+}
+
+async function saveEdit(entry, newMsg) {
+    const listError = document.querySelector('#list-error');
+
+    try {
+        const response = await fetch(`/api/guestbook/${encodeURIComponent(entry.id)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ msg: newMsg })
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            listError.textContent = data.error || 'Could not save your changes.';
+            return;
+        }
+        loadMessages();
+    } catch (err) {
+        listError.textContent = 'Could not reach the server. Check your connection.';
+    }
+}
+
+function startEdit(li, entry) {
+    li.innerHTML = '';
+
+    const textarea = document.createElement('textarea');
+    textarea.value = entry.msg;
+    textarea.maxLength = 280;
+
+    const saveButton = document.createElement('button');
+    saveButton.type = 'button';
+    saveButton.textContent = 'Save';
+    saveButton.addEventListener('click', () => saveEdit(entry, textarea.value));
+
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.textContent = 'Cancel';
+    cancelButton.addEventListener('click', loadMessages);
+
+    li.append(textarea, saveButton, cancelButton);
+    textarea.focus();
+}
+
 async function loadMessages() {
     const listError = document.querySelector('#list-error');
-    console.log(listError)
     listError.textContent = '';
-    console.log('entries')
+
     try {
-        console.log('fetching entries')
+        if (!currentUser) {
+            currentUser = await (await fetch('/api/whoami')).json();
+        }
+
         const response = await fetch('/api/guestbook');
         const entries = await response.json().catch(() => ({}));
-        console.log('entries', entries)
         if (!response.ok) {
             listError.textContent = entries.error || 'Could not load messages.';
             return;
         }
 
         const list = document.querySelector('#guestbook-list');
-        list.innerHTML = ''; // Clearing with an empty string is safe
-        // Newest first: copy the array, then reverse the copy
+        list.innerHTML = '';
         [...entries].reverse().forEach(entry => {
             const li = document.createElement('li');
 
@@ -29,10 +91,31 @@ async function loadMessages() {
             msg.textContent = entry.msg;
 
             li.append(name, ' ', date, msg);
+
+            if (entry.updatedAt) {
+                const edited = document.createElement('small');
+                edited.textContent = ' (edited)';
+                li.append(edited);
+            }
+
+            const canEdit = entry.authorId === currentUser.userId || currentUser.role === 'admin';
+            if (canEdit) {
+                const editButton = document.createElement('button');
+                editButton.type = 'button';
+                editButton.textContent = 'Edit';
+                editButton.addEventListener('click', () => startEdit(li, entry));
+
+                const deleteButton = document.createElement('button');
+                deleteButton.type = 'button';
+                deleteButton.textContent = 'Delete';
+                deleteButton.addEventListener('click', () => deleteEntry(entry.id));
+
+                li.append(editButton, deleteButton);
+            }
+
             list.append(li);
         });
     } catch (err) {
-        console.log(err);
         listError.textContent = 'Could not reach the server. Check your connection.';
     }
 }
@@ -47,22 +130,62 @@ document.querySelector('#guestbook-form').addEventListener('submit', async (e) =
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                name: document.querySelector('#name').value,
-                msg: document.querySelector('#msg').value
+                msg: document.querySelector('#msg').value,
+                website: document.querySelector('#website').value
             })
         });
 
         if (!response.ok) {
             const data = await response.json().catch(() => ({}));
             errorBox.textContent = data.error || 'Something went wrong. Please try again.';
-            return; // keep what the user typed
+            return;
         }
     } catch (err) {
         errorBox.textContent = 'Could not reach the server. Check your connection.';
         return;
     }
     e.target.reset();
-    loadMessages(); // refresh the list without reloading the page
+    loadMessages();
 });
 
+const logoutButton = document.querySelector('#logout-button');
+
+async function checkGuestbookAuth() {
+    if (!logoutButton) return;
+
+    try {
+        const response = await fetch('/api/whoami');
+        const data = await response.json().catch(() => ({ loggedIn: false }));
+
+        if (!data.loggedIn) {
+            window.location.href = '/';
+            return;
+        }
+
+        logoutButton.hidden = false;
+    } catch (error) {
+        window.location.href = '/';
+    }
+}
+
+if (logoutButton) {
+    logoutButton.addEventListener('click', async () => {
+        try {
+            const response = await fetch('/logout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            const data = await response.json().catch(() => ({ success: false }));
+
+            if (data.success) {
+                window.location.href = '/';
+            }
+        } catch (error) {
+            window.location.href = '/';
+        }
+    });
+}
+
+checkGuestbookAuth();
 loadMessages();

@@ -10,14 +10,10 @@ async function checkAuthState() {
         const data = await response.json();
 
         if (data.loggedIn) {
-            status.innerHTML = `
-                <div class="eyebrow">Welcome back</div>
-                <h1>You're signed in.</h1>
-                <p>Your workspace is ready to go. Open the dashboard to view your projects and continue managing the app.</p>
-                <div class="hero-actions">
-                    <a href="/dashboard" class="primary-button">Open dashboard</a>
-                </div>
-            `;
+            status.textContent = '';
+            const heading = document.createElement('h1');
+            heading.textContent = `Welcome back, ${data.username}!`;
+            status.append(heading);
             loginSection.hidden = true;
             logoutButton.hidden = false;
         } else {
@@ -45,10 +41,11 @@ loginForm.addEventListener('submit', async (event) => {
 
     const password = document.querySelector('#password').value;
     const rememberMe = event.target.rememberMe.checked;
+    const username = document.querySelector('#username').value;
     const response = await fetch('/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, rememberMe })
+        body: JSON.stringify({ username, password, rememberMe })
     });
 
     const data = await response.json().catch(() => ({ success: false }));
